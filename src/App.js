@@ -7,7 +7,6 @@ import 'survey-core/i18n/japanese';
 import 'survey-core/i18n/english';
 import './survey-builder.css';
 
-
 const API_URL = 'http://localhost:3001/api';
 
 const SurveyBuilder = () => {
@@ -44,7 +43,7 @@ const SurveyBuilder = () => {
   const [surveySettingsExpanded, setSurveySettingsExpanded] = useState(true);
   const [editingMode, setEditingMode] = useState('question'); // 'survey', 'section', 'question'
   const [surveys, setSurveys] = useState([]);
-  const [loadedSurveyFilename, setLoadedSurveyFilename] = useState(null);
+  const [loadedSurveyId, setLoadedSurveyId] = useState(null);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [isPublishing, setIsPublishing] = useState(false);
     
@@ -55,10 +54,10 @@ const SurveyBuilder = () => {
 
   // Add this useEffect to track unsaved changes
   useEffect(() => {
-    if (loadedSurveyFilename) {
+    if (loadedSurveyId) {
       setHasUnsavedChanges(true);
     }
-  }, [surveyTitle, surveyDescription, sections]);
+  }, [surveyTitle, surveyDescription, sections, loadedSurveyId]);
 
   const questionTypes = [
     { value: 'text', label: 'Text Input' },
@@ -269,7 +268,7 @@ const SurveyBuilder = () => {
     }
   };
 
-  const loadSurvey = async (filename) => {
+  const loadSurvey = async (surveyId) => {
     if (hasUnsavedChanges) {
       if (!window.confirm('You have unsaved changes. Load this survey anyway?')) {
         return;
@@ -277,13 +276,13 @@ const SurveyBuilder = () => {
     }
 
     try {
-      const response = await fetch(`${API_URL}/surveys/${filename}`);
+      const response = await fetch(`${API_URL}/surveys/${surveyId}`);
       const data = await response.json();
       
       setSurveyTitle(data.title || 'My Survey');
       setSurveyDescription(data.description || '');
+      setSurveyLanguage(data.locale || 'en');
       
-      // Convert SurveyJS pages back to our sections format
       const loadedSections = data.pages.map((page, index) => ({
         id: index + 1,
         name: page.name,
@@ -303,7 +302,7 @@ const SurveyBuilder = () => {
       setSections(loadedSections);
       setActiveSectionId(loadedSections[0]?.id);
       setEditingQuestion(loadedSections[0]?.questions[0]);
-      setLoadedSurveyFilename(filename);
+      setLoadedSurveyId(surveyId);
       setHasUnsavedChanges(false);
       alert('Survey loaded successfully!');
     } catch (error) {
@@ -321,7 +320,6 @@ const SurveyBuilder = () => {
     setIsPublishing(true);
     try {
       const surveyData = generateSurveyJSON();
-      const filename = loadedSurveyFilename || `${surveyTitle.replace(/[^a-z0-9]/gi, '_').toLowerCase()}.json`;
       
       const response = await fetch(`${API_URL}/surveys`, {
         method: 'POST',
@@ -330,14 +328,14 @@ const SurveyBuilder = () => {
         },
         body: JSON.stringify({
           surveyData,
-          filename
+          surveyId: loadedSurveyId
         })
       });
 
       const result = await response.json();
       
       if (result.success) {
-        setLoadedSurveyFilename(filename);
+        setLoadedSurveyId(result.surveyId);
         setHasUnsavedChanges(false);
         await fetchSurveys();
         alert('Survey published successfully!');
@@ -352,13 +350,13 @@ const SurveyBuilder = () => {
     }
   };
 
-  const deleteSurvey = async (filename) => {
+  const deleteSurvey = async (surveyId) => {
     if (!window.confirm('Are you sure you want to delete this survey?')) {
       return;
     }
 
     try {
-      const response = await fetch(`${API_URL}/surveys/${filename}`, {
+      const response = await fetch(`${API_URL}/surveys/${surveyId}`, {
         method: 'DELETE'
       });
 
@@ -366,8 +364,8 @@ const SurveyBuilder = () => {
       
       if (result.success) {
         await fetchSurveys();
-        if (loadedSurveyFilename === filename) {
-          setLoadedSurveyFilename(null);
+        if (loadedSurveyId === surveyId) {
+          setLoadedSurveyId(null);
         }
         alert('Survey deleted successfully!');
       } else {
@@ -384,7 +382,7 @@ const SurveyBuilder = () => {
       <Header 
         mode={mode}
         onModeChange={setMode}
-        onPublish={publishSurvey} // This was missing!
+        onPublish={publishSurvey}
         isPublishing={isPublishing}
         hasUnsavedChanges={hasUnsavedChanges}
         onExport={() => {
@@ -396,7 +394,7 @@ const SurveyBuilder = () => {
       {mode === 'builder' ? (
         <BuilderView
           surveys={surveys}
-          loadedSurveyFilename={loadedSurveyFilename}
+          loadedSurveyId={loadedSurveyId}
           onLoadSurvey={loadSurvey}
           onDeleteSurvey={deleteSurvey}
           surveyTitle={surveyTitle}
@@ -480,7 +478,7 @@ const ChevronIcon = ({ isExpanded }) => (
   </svg>
 );
 
-const SurveyListSidebar = ({ surveys, loadedSurveyFilename, onLoadSurvey, onDeleteSurvey }) => (
+const SurveyListSidebar = ({ surveys, loadedSurveyId, onLoadSurvey, onDeleteSurvey }) => (
   <aside className="survey-list-sidebar">
     <div className="survey-list-header">
       <h3>Saved Surveys</h3>
@@ -494,12 +492,12 @@ const SurveyListSidebar = ({ surveys, loadedSurveyFilename, onLoadSurvey, onDele
       ) : (
         (surveys || []).map((survey) => (
           <div 
-            key={survey.filename}
-            className={`survey-list-item ${loadedSurveyFilename === survey.filename ? 'survey-list-item-active' : ''}`}
+            key={survey.id}
+            className={`survey-list-item ${loadedSurveyId === survey.id ? 'survey-list-item-active' : ''}`}
           >
             <div 
               className="survey-list-item-content"
-              onClick={() => onLoadSurvey(survey.filename)}
+              onClick={() => onLoadSurvey(survey.id)}
             >
               <div className="survey-list-item-name">{survey.name}</div>
               <div className="survey-list-item-date">
@@ -510,7 +508,7 @@ const SurveyListSidebar = ({ surveys, loadedSurveyFilename, onLoadSurvey, onDele
               className="survey-list-item-delete"
               onClick={(e) => {
                 e.stopPropagation();
-                onDeleteSurvey(survey.filename);
+                onDeleteSurvey(survey.id);
               }}
               title="Delete survey"
             >
@@ -525,7 +523,7 @@ const SurveyListSidebar = ({ surveys, loadedSurveyFilename, onLoadSurvey, onDele
 
 const BuilderView = ({
   surveys,
-  loadedSurveyFilename,
+  loadedSurveyId,
   surveyLanguage,
   onLanguageChange,
   onLoadSurvey,
@@ -559,7 +557,7 @@ const BuilderView = ({
     <div className="builder-layout-with-surveys">
       <SurveyListSidebar 
         surveys={surveys}
-        loadedSurveyFilename={loadedSurveyFilename}
+        loadedSurveyId={loadedSurveyId}
         onLoadSurvey={onLoadSurvey}
         onDeleteSurvey={onDeleteSurvey}
       />
@@ -725,10 +723,10 @@ const BuilderView = ({
 const SurveySettingsEditor = ({ 
   surveyTitle, 
   surveyDescription, 
-  surveyLanguage, // Add this prop
+  surveyLanguage,
   onTitleChange, 
   onDescriptionChange,
-  onLanguageChange // Add this prop
+  onLanguageChange
 }) => (
   <div className="card">
     <div className="editor-header">
@@ -755,7 +753,6 @@ const SurveySettingsEditor = ({
         />
       </div>
       
-      {/* Add Language Selector */}
       <div className="form-group">
         <label className="label">Survey Language</label>
         <div className="language-selector">
@@ -834,7 +831,6 @@ const QuestionEditor = ({ question, sectionId, questionTypes, onUpdate, onDelete
     question.choices.join('\n')
   );
 
-  // Sync temp state when the selected question changes (e.g., switching questions)
   React.useEffect(() => {
     setTempChoicesText(question.choices.join('\n'));
   }, [question.id]);
@@ -847,7 +843,7 @@ const QuestionEditor = ({ question, sectionId, questionTypes, onUpdate, onDelete
     const cleaned = tempChoicesText
       .split('\n')
       .map(c => c.trim())
-      .filter(c => c); // Remove empty lines only when user leaves the field
+      .filter(c => c);
     onUpdate({ choices: cleaned });
   };
 

@@ -16,32 +16,29 @@ const supabase = createClient(
   process.env.SUPABASE_KEY
 );
 
-const BUCKET_NAME = 'Kinder Survey';
-
 // Get all surveys
 app.get('/api/surveys', async (req, res) => {
   try {
-    const { data, error } = await supabase.storage
-      .from(BUCKET_NAME)
-      .list('', {
-        limit: 100,
-        offset: 0,
-        sortBy: { column: 'created_at', order: 'desc' }
-      });
+    const { data, error } = await supabase
+      .from('SurveySchemas')
+      .select('id, content, createdDate, changedDate')
+      .order('changedDate', { ascending: false });
 
     if (error) throw error;
 
-    // Filter only JSON files and get metadata
-    const surveys = data
-      .filter(file => file.name.endsWith('.json'))
-      .map(file => ({
-        id: file.id,
-        name: file.name.replace('.json', ''),
-        filename: file.name,
-        createdAt: file.created_at,
-        updatedAt: file.updated_at,
-        size: file.metadata?.size || 0
-      }));
+    const surveys = data.map(survey => {
+      const content = typeof survey.content === 'string' 
+        ? JSON.parse(survey.content) 
+        : survey.content;
+      
+      return {
+        id: survey.id,
+        name: content.title || 'Untitled Survey',
+        filename: survey.id.toString(),
+        createdAt: survey.createdDate,
+        updatedAt: survey.changedDate
+      };
+    });
 
     res.json(surveys);
   } catch (error) {
@@ -50,20 +47,22 @@ app.get('/api/surveys', async (req, res) => {
   }
 });
 
-// Get a specific survey
-app.get('/api/surveys/:filename', async (req, res) => {
+// Get a specific survey by ID
+app.get('/api/surveys/:id', async (req, res) => {
   try {
-    const { filename } = req.params;
-    const fullFilename = filename.endsWith('.json') ? filename : `${filename}.json`;
+    const { id } = req.params;
 
-    const { data, error } = await supabase.storage
-      .from(BUCKET_NAME)
-      .download(fullFilename);
+    const { data, error } = await supabase
+      .from('SurveySchemas')
+      .select('*')
+      .eq('id', id)
+      .single();
 
     if (error) throw error;
 
-    const text = await data.text();
-    const surveyData = JSON.parse(text);
+    const surveyData = typeof data.content === 'string' 
+      ? JSON.parse(data.content) 
+      : data.content;
 
     res.json(surveyData);
   } catch (error) {
@@ -75,41 +74,51 @@ app.get('/api/surveys/:filename', async (req, res) => {
 // Create or update a survey
 app.post('/api/surveys', async (req, res) => {
   try {
-    const { surveyData, filename } = req.body;
+    const { surveyData, surveyId } = req.body;
     
-    if (!surveyData || !filename) {
-      return res.status(400).json({ error: 'Survey data and filename are required' });
+    if (!surveyData) {
+      return res.status(400).json({ error: 'Survey data is required' });
     }
 
-    // Add metadata
-    const dataWithMetadata = {
-      ...surveyData,
-      metadata: {
-        author: '',
-        createdAt: surveyData.metadata?.createdAt || new Date().toISOString(),
-        lastModified: new Date().toISOString()
-      }
-    };
+    if (surveyId) {
+      // Update existing survey
+      const { data, error } = await supabase
+        .from('SurveySchemas')
+        .update({ 
+          content: surveyData,
+          changedDate: new Date().toISOString()
+        })
+        .eq('id', surveyId)
+        .select()
+        .single();
 
-    const fullFilename = filename.endsWith('.json') ? filename : `${filename}.json`;
-    const jsonString = JSON.stringify(dataWithMetadata, null, 2);
-    const blob = new Blob([jsonString], { type: 'application/json' });
+      if (error) throw error;
 
-    // Upload (upsert will overwrite if exists)
-    const { data, error } = await supabase.storage
-      .from(BUCKET_NAME)
-      .upload(fullFilename, blob, {
-        contentType: 'application/json',
-        upsert: true
+      res.json({ 
+        success: true, 
+        message: 'Survey updated successfully',
+        surveyId: data.id
       });
+    } else {
+      // Create new survey
+      const { data, error } = await supabase
+        .from('SurveySchemas')
+        .insert({ 
+          content: surveyData,
+          createdDate: new Date().toISOString(),
+          changedDate: new Date().toISOString()
+        })
+        .select()
+        .single();
 
-    if (error) throw error;
+      if (error) throw error;
 
-    res.json({ 
-      success: true, 
-      message: 'Survey published successfully',
-      filename: fullFilename
-    });
+      res.json({ 
+        success: true, 
+        message: 'Survey created successfully',
+        surveyId: data.id
+      });
+    }
   } catch (error) {
     console.error('Error saving survey:', error);
     res.status(500).json({ error: 'Failed to save survey' });
@@ -117,14 +126,23 @@ app.post('/api/surveys', async (req, res) => {
 });
 
 // Delete a survey
-app.delete('/api/surveys/:filename', async (req, res) => {
+app.delete('/api/surveys/:id', async (req, res) => {
   try {
-    const { filename } = req.params;
-    const fullFilename = filename.endsWith('.json') ? filename : `${filename}.json`;
+    const { id } = req.params;
 
-    const { error } = await supabase.storage
-      .from(BUCKET_NAME)
-      .remove([fullFilename]);
+    // First delete all associated results
+    const { error: resultsError } = await supabase
+      .from('SurveyResults')
+      .delete()
+      .eq('survey_schema_id', id);
+
+    if (resultsError) throw resultsError;
+
+    // Then delete the survey schema
+    const { error } = await supabase
+      .from('SurveySchemas')
+      .delete()
+      .eq('id', id);
 
     if (error) throw error;
 
@@ -132,6 +150,68 @@ app.delete('/api/surveys/:filename', async (req, res) => {
   } catch (error) {
     console.error('Error deleting survey:', error);
     res.status(500).json({ error: 'Failed to delete survey' });
+  }
+});
+
+// Submit survey results
+app.post('/api/surveys/:id/results', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { results } = req.body;
+
+    if (!results) {
+      return res.status(400).json({ error: 'Survey results are required' });
+    }
+
+    const { data, error } = await supabase
+      .from('SurveyResults')
+      .insert({
+        survey_schema_id: id,
+        content: results,
+        created_at: new Date().toISOString()
+      })
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    res.json({ 
+      success: true, 
+      message: 'Survey results submitted successfully',
+      resultId: data.id
+    });
+  } catch (error) {
+    console.error('Error submitting survey results:', error);
+    res.status(500).json({ error: 'Failed to submit survey results' });
+  }
+});
+
+// Get results for a specific survey
+app.get('/api/surveys/:id/results', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const { data, error } = await supabase
+      .from('SurveyResults')
+      .select('*')
+      .eq('survey_schema_id', id)
+      .order('created_at', { ascending: false });
+
+    if (error) throw error;
+
+    const results = data.map(result => ({
+      id: result.id,
+      surveySchemaId: result.survey_schema_id,
+      content: typeof result.content === 'string' 
+        ? JSON.parse(result.content) 
+        : result.content,
+      createdAt: result.created_at
+    }));
+
+    res.json(results);
+  } catch (error) {
+    console.error('Error fetching survey results:', error);
+    res.status(500).json({ error: 'Failed to fetch survey results' });
   }
 });
 

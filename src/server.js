@@ -16,6 +16,29 @@ const supabase = createClient(
   process.env.SUPABASE_KEY
 );
 
+app.get('/api/surveys/:id/schema', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const { data, error } = await supabase
+      .from('SurveySchemas')
+      .select('content')
+      .eq('id', id)
+      .single();
+
+    if (error) throw error;
+
+    const surveyData = typeof data.content === 'string' 
+      ? JSON.parse(data.content) 
+      : data.content;
+
+    res.json(surveyData);
+  } catch (error) {
+    console.error('Error fetching survey schema:', error);
+    res.status(404).json({ error: 'Survey not found' });
+  }
+});
+
 // Get all surveys
 app.get('/api/surveys', async (req, res) => {
   try {
@@ -159,6 +182,8 @@ app.post('/api/surveys/:id/results', async (req, res) => {
     const { id } = req.params;
     const { results } = req.body;
 
+    console.log('Received survey submission:', { id, results }); // Debug log
+
     if (!results) {
       return res.status(400).json({ error: 'Survey results are required' });
     }
@@ -167,13 +192,15 @@ app.post('/api/surveys/:id/results', async (req, res) => {
       .from('SurveyResults')
       .insert({
         survey_schema_id: id,
-        content: results,
-        created_at: new Date().toISOString()
+        content: results
       })
       .select()
       .single();
 
-    if (error) throw error;
+    if (error) {
+      console.error('Supabase error:', error); // Debug log
+      throw error;
+    }
 
     res.json({ 
       success: true, 
@@ -182,7 +209,10 @@ app.post('/api/surveys/:id/results', async (req, res) => {
     });
   } catch (error) {
     console.error('Error submitting survey results:', error);
-    res.status(500).json({ error: 'Failed to submit survey results' });
+    res.status(500).json({ 
+      error: 'Failed to submit survey results',
+      details: error.message 
+    });
   }
 });
 
@@ -195,7 +225,7 @@ app.get('/api/surveys/:id/results', async (req, res) => {
       .from('SurveyResults')
       .select('*')
       .eq('survey_schema_id', id)
-      .order('created_at', { ascending: false });
+      .order('id', { ascending: false });
 
     if (error) throw error;
 
@@ -204,8 +234,7 @@ app.get('/api/surveys/:id/results', async (req, res) => {
       surveySchemaId: result.survey_schema_id,
       content: typeof result.content === 'string' 
         ? JSON.parse(result.content) 
-        : result.content,
-      createdAt: result.created_at
+        : result.content
     }));
 
     res.json(results);

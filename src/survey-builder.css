@@ -731,3 +731,20 @@ body {
 .radio-label span {
   flex: 1;
 }
+
+.url-display-container {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.url-input {
+  flex: 1;
+  font-family: 'Monaco', 'Courier New', monospace;
+  font-size: 0.8125rem;
+}
+
+.url-display-container .btn {
+  white-space: nowrap;
+  flex-shrink: 0;
+}
